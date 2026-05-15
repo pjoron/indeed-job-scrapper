@@ -1,0 +1,9 @@
+httpx
+beautifulsoup4
+playwright
+pocketbase
+apscheduler
+pandas
+plotly
+python-dotenv
+loguru
