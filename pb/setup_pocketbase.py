@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+"""Init script for the Indeed scraper PocketBase instance.
+
+Creates (or updates, idempotently) the three collections that back the
+time-series analysis:
+
+  - scrape_runs   : one row per scrape execution (volume time-series)
+  - jobs          : the current state of each job offer (1 row / offer)
+  - job_snapshots : history of field changes over time (temporal analysis core)
+
+Run PocketBase first (`cd pb && ./pocketbase serve`), then:
+    python pb/setup_pocketbase.py
+"""
 
 import os
 import sys
@@ -16,28 +28,37 @@ PB_SUPERUSER_EMAIL = os.getenv("PB_SUPERUSER_EMAIL", "")
 PB_SUPERUSER_PASSWORD = os.getenv("PB_SUPERUSER_PASSWORD", "")
 PB_EXECUTABLE = os.getenv("PB_EXECUTABLE", "./pocketbase")
 
+# Access rules: everything is restricted to the superuser (no public access).
+_SUPERUSER_ONLY = {
+    "listRule": None,
+    "viewRule": None,
+    "createRule": None,
+    "updateRule": None,
+    "deleteRule": None,
+}
+
 COLLECTIONS = [
     {
         "name": "scrape_runs",
         "type": "base",
         "fields": [
-            {"name": "source", "type": "text", "required": True},
-            {"name": "jobs_found", "type": "number", "required": True, "min": 0},
-            {"name": "jobs_new", "type": "number", "required": True, "min": 0},
-            {"name": "jobs_updated", "type": "number", "required": True, "min": 0},
-            {"name": "jobs_deactivated", "type": "number", "required": True, "min": 0},
-            {"name": "errors", "type": "number", "required": True, "min": 0},
+            {"name": "keyword", "type": "text", "required": True},
+            {"name": "location", "type": "text"},
+            {"name": "jobs_found", "type": "number", "min": 0},
+            {"name": "jobs_new", "type": "number", "min": 0},
+            {"name": "jobs_updated", "type": "number", "min": 0},
+            {"name": "jobs_deactivated", "type": "number", "min": 0},
+            {"name": "errors", "type": "number", "min": 0},
             {"name": "duration_seconds", "type": "number", "min": 0},
             {"name": "started_at", "type": "autodate", "onCreate": True, "onUpdate": False},
             {"name": "status", "type": "select", "required": True, "values": ["running", "success", "partial", "failed"], "maxSelect": 1},
             {"name": "error_message", "type": "text"},
         ],
-        "indexes": ["CREATE INDEX idx_scrape_runs_source ON scrape_runs (source)"],
-        "listRule": "@request.auth.id != ''",
-        "viewRule": "@request.auth.id != ''",
-        "createRule": "@request.auth.id != ''",
-        "updateRule": "@request.auth.id != ''",
-        "deleteRule": None,
+        "indexes": [
+            "CREATE INDEX idx_scrape_runs_keyword ON scrape_runs (keyword)",
+            "CREATE INDEX idx_scrape_runs_started ON scrape_runs (started_at)",
+        ],
+        **_SUPERUSER_ONLY,
     },
     {
         "name": "jobs",
@@ -50,31 +71,29 @@ COLLECTIONS = [
             {"name": "salary_min", "type": "number", "min": 0},
             {"name": "salary_max", "type": "number", "min": 0},
             {"name": "salary_currency", "type": "text"},
+            {"name": "salary_period", "type": "select", "values": ["year", "month", "week", "day", "hour"], "maxSelect": 1},
             {"name": "contract_type", "type": "select", "values": ["CDI", "CDD", "Freelance", "Stage", "Alternance", "Interim", "Autre"], "maxSelect": 1},
-            {"name": "source", "type": "select", "values": ["linkedin", "indeed", "wttj", "apec", "pole_emploi", "other"], "required": True, "maxSelect": 1},
+            {"name": "indeed_jk", "type": "text", "required": True},
             {"name": "source_url", "type": "url", "required": True},
-            {"name": "source_id", "type": "text", "required": True},
             {"name": "description", "type": "editor"},
             {"name": "tags", "type": "json"},
             {"name": "posted_at", "type": "date"},
-            {"name": "scraped_at", "type": "autodate", "onCreate": True, "onUpdate": False},
+            {"name": "first_seen_at", "type": "date"},
             {"name": "last_seen_at", "type": "date"},
-            {"name": "is_active", "type": "bool", "required": True},
+            {"name": "scraped_at", "type": "autodate", "onCreate": True, "onUpdate": False},
+            {"name": "is_active", "type": "bool"},
+            {"name": "search_keyword", "type": "text", "required": True},
             {"name": "scrape_run", "type": "relation", "collectionId": "__scrape_runs__", "cascadeDelete": False, "maxSelect": 1},
         ],
         "indexes": [
-            "CREATE UNIQUE INDEX idx_jobs_source_id ON jobs (source, source_id)",
+            "CREATE UNIQUE INDEX idx_jobs_jk ON jobs (indeed_jk)",
             "CREATE INDEX idx_jobs_company ON jobs (company)",
             "CREATE INDEX idx_jobs_posted_at ON jobs (posted_at)",
             "CREATE INDEX idx_jobs_is_active ON jobs (is_active)",
-            "CREATE INDEX idx_jobs_source ON jobs (source)",
+            "CREATE INDEX idx_jobs_search_keyword ON jobs (search_keyword)",
             "CREATE INDEX idx_jobs_contract ON jobs (contract_type)",
         ],
-        "listRule": "@request.auth.id != ''",
-        "viewRule": "@request.auth.id != ''",
-        "createRule": "@request.auth.id != ''",
-        "updateRule": "@request.auth.id != ''",
-        "deleteRule": None,
+        **_SUPERUSER_ONLY,
     },
     {
         "name": "job_snapshots",
@@ -91,13 +110,10 @@ COLLECTIONS = [
             "CREATE INDEX idx_snapshots_detected_at ON job_snapshots (detected_at)",
             "CREATE INDEX idx_snapshots_field ON job_snapshots (field_changed)",
         ],
-        "listRule": "@request.auth.id != ''",
-        "viewRule": "@request.auth.id != ''",
-        "createRule": "@request.auth.id != ''",
-        "updateRule": None,
-        "deleteRule": None,
+        **_SUPERUSER_ONLY,
     },
 ]
+
 
 def wait_for_pocketbase(url: str, timeout: int = 30) -> bool:
     print(f"Waiting for PocketBase at {url}...")
@@ -111,6 +127,7 @@ def wait_for_pocketbase(url: str, timeout: int = 30) -> bool:
             pass
         time.sleep(1)
     return False
+
 
 def create_superuser_via_cli(executable: str, email: str, password: str) -> bool:
     exe = Path(executable)
@@ -146,6 +163,7 @@ def create_superuser_via_cli(executable: str, email: str, password: str) -> bool
     print("No compatible CLI command found.")
     return False
 
+
 def authenticate(url: str, email: str, password: str, silent: bool = False) -> str | None:
     try:
         r = httpx.post(
@@ -166,6 +184,7 @@ def authenticate(url: str, email: str, password: str, silent: bool = False) -> s
             print(f"Network error during authentication: {e}")
         return None
 
+
 def get_existing_collections(url: str, token: str) -> dict[str, str]:
     try:
         r = httpx.get(
@@ -179,6 +198,7 @@ def get_existing_collections(url: str, token: str) -> dict[str, str]:
         return {}
     except httpx.RequestError:
         return {}
+
 
 def resolve_relation_ids(fields: list, collection_ids: dict) -> list:
     resolved = []
@@ -196,6 +216,7 @@ def resolve_relation_ids(fields: list, collection_ids: dict) -> list:
                     f.pop("collectionId", None)
         resolved.append(f)
     return resolved
+
 
 def create_or_update_collection(url: str, token: str, schema: dict, existing: dict[str, str]) -> bool:
     name = schema["name"]
@@ -223,12 +244,12 @@ def create_or_update_collection(url: str, token: str, schema: dict, existing: di
         if r.status_code in (200, 201):
             print(f"Collection '{name}' {action}.")
             return True
-        else:
-            print(f"Error for '{name}' - HTTP {r.status_code}: {r.text[:300]}")
-            return False
+        print(f"Error for '{name}' - HTTP {r.status_code}: {r.text[:300]}")
+        return False
     except httpx.RequestError as e:
         print(f"Network error for '{name}': {e}")
         return False
+
 
 def main():
     if not PB_SUPERUSER_EMAIL or not PB_SUPERUSER_PASSWORD:
@@ -275,9 +296,9 @@ def main():
     if success_count == total:
         print(f"Setup completed successfully: {success_count}/{total} collections configured.")
         sys.exit(0)
-    else:
-        print(f"Setup partial: {success_count}/{total} collections configured.")
-        sys.exit(1)
+    print(f"Setup partial: {success_count}/{total} collections configured.")
+    sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
