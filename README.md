@@ -66,11 +66,3 @@ cp .env.example .env   # puis ajuster les identifiants superuser pb
   une seule : `développeur full-stack` / `France`.
 - `.env` : identifiants PocketBase + paramètres de scraping (`HEADLESS`, `MAX_PAGES`,
   `FETCH_DETAILS`, délais `MIN_DELAY`/`MAX_DELAY`) et cadence du scheduler.
-
-## ⚠️ Anti-bot
-
-Indeed protège ses pages (Cloudflare/DataDome, CAPTCHA). Le scraper utilise Playwright en
-mode furtif (UA réaliste, locale fr-FR, délais aléatoires, `playwright-stealth`), mais
-c'est **best-effort** : en cas de blocage le run est marqué `partial`/`failed` dans
-`scrape_runs`. Le scraper est isolé derrière `JobDTO`, donc remplaçable par une API tierce
-payante (Apify/ScraperAPI/Bright Data) sans toucher au pipeline ni à l'analyse.
