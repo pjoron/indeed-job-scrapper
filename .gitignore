@@ -1,0 +1,16 @@
+__pycache__
+.DS_Store
+.vscode
+.idea
+*.log
+
+# env
+.env
+
+# pocketbase
+pb/pocketbase
+pb/pb_data
+pb/pb_migrations
+
+# reports
+reports/
