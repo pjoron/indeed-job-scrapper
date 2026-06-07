@@ -8,5 +8,9 @@ __pycache__
 .env
 
 # pocketbase
-pocketbase
-pb_data
+pb/pocketbase
+pb/pb_data
+pb/pb_migrations
+
+# reports
+reports/
